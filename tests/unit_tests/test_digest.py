@@ -1,5 +1,5 @@
-# from protein_digest import digest
-from protein_digest import digest_rs as digest
+from protein_digest import digest
+# from protein_digest import digest_rs as digest
 
 
 class TestNonSpecificDigest:
