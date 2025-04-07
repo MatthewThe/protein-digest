@@ -62,7 +62,7 @@ def semi_specific_digest(
 
     for i in range(seq_len):
         is_cleavage_site = is_enzymatic(
-            seq[min([seq_len - 1, i])],
+            seq[i],
             seq[min([seq_len - 1, i + 1])],
             pre,
             not_post,
@@ -72,13 +72,13 @@ def semi_specific_digest(
         if i == seq_len - 1 or is_cleavage_site or is_methionine_cleavage_site:
             # peptides with enzymatic C-terminal (both enzymatic and non-enzymatic N-terminal)
             start = starts[0]
-            for j in range(start, min([i + 1, seq_len])):
-                pep_len = min([i, seq_len - 1]) - j + 1
+            for j in range(start, i + 1):
+                pep_len = i - j + 1
                 if length_accepted(pep_len):
                     yield (seq[j : i + 1])
             starts.append(i + 1)
             methionine_cleaved = int(starts[0] == 0 and methionine_cleavage)
-            if len(starts) > miscleavages + 1 + methionine_cleaved or i == seq_len:
+            if len(starts) > miscleavages + 1 + methionine_cleaved or i == seq_len - 1:
                 starts = starts[1 + methionine_cleaved :]
         else:  # peptides with non enzymatic C-terminal
             for start in starts:
