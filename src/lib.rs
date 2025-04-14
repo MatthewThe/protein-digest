@@ -1,5 +1,125 @@
 use pyo3::prelude::*;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use pyo3::types::PyList;
+
+fn parse_until_first_space(fasta_id: &str) -> &str {
+    fasta_id.split(' ').next().unwrap_or(fasta_id)
+}
+
+fn swap_positions(seq: &mut Vec<char>, pos1: usize, pos2: usize) {
+    seq.swap(pos1, pos2);
+}
+
+fn swap_special_aas(seq: &str, special_aas: &[char]) -> String {
+    let mut chars: Vec<char> = seq.chars().collect();
+    for i in 1..chars.len() {
+        if special_aas.contains(&chars[i]) {
+            swap_positions(&mut chars, i, i - 1);
+        }
+    }
+    chars.into_iter().collect()
+}
+
+fn read_fasta_maxquant(
+    file_path: &str,
+    db: &str,
+    special_aas: &[char],
+    decoy_prefix: &str,
+) -> Vec<(String, String)> {
+    let file = File::open(file_path).expect("Unable to open file");
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    let mut name: Option<String> = None;
+    let mut seq = Vec::new();
+    let lines = reader.lines().map(|l| l.unwrap()).chain(std::iter::once(">".to_string()));
+
+    for line in lines {
+        let line = line.trim();
+        if line.starts_with('>') {
+            if let Some(ref name_val) = name {
+                let sequence: String = seq.concat();
+
+                if db == "target" || db == "concat" {
+                    records.push((name_val.clone(), sequence.clone()));
+                }
+
+                if db == "decoy" || db == "concat" {
+                    let mut rev_seq: String = sequence.chars().rev().collect();
+                    if !special_aas.is_empty() {
+                        rev_seq = swap_special_aas(&rev_seq, special_aas);
+                    }
+                    records.push((format!("{}{}", decoy_prefix, name_val), rev_seq));
+                }
+            }
+            if line.len() > 1 {
+                name = Some(parse_until_first_space(&line[1..]).to_string());
+                seq = Vec::new();
+            }
+        } else {
+            seq.push(line.to_string());
+        }
+    }
+    records
+}
+
+#[pyfunction]
+fn get_peptide_to_protein_map(
+    fasta_file: &str,
+    db: &str,
+    min_len: usize,
+    max_len: usize,
+    pre: &Bound<'_, PyList>,
+    not_post: &Bound<'_, PyList>,
+    post: &Bound<'_, PyList>,
+    digestion: &str,
+    miscleavages: usize,
+    methionine_cleavage: bool,
+    special_aas: &Bound<'_, PyList>,
+) -> PyResult<HashMap<String, Vec<String>>> {
+    let mut peptide_to_protein_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Convert strings to chars for internal use
+    let special_aas: Vec<char> = special_aas
+        .extract::<Vec<String>>()?
+        .into_iter()
+        .flat_map(|s| s.chars().collect::<Vec<char>>())
+        .collect();
+
+    let records = read_fasta_maxquant(fasta_file, db, &special_aas, "REV__");
+
+    for (idx, (protein, seq)) in records.iter().enumerate() {
+        if idx % 10000 == 0 {
+            println!("Digesting protein {}", idx);
+        }
+
+        let mut seen_peptides = HashSet::new();
+
+        let peptides = get_digested_peptides(
+            seq,
+            min_len,
+            max_len,
+            &pre,
+            &not_post,
+            &post,
+            digestion,
+            miscleavages,
+            methionine_cleavage,
+        )?;
+
+        for pep in peptides {
+            if seen_peptides.insert(pep.clone()) {
+                peptide_to_protein_map.entry(pep).or_default().push(protein.clone());
+            }
+        }
+    }
+
+    Ok(peptide_to_protein_map)
+}
+
 
 /// Check if a cleavage site is enzymatic
 fn is_enzymatic(aa1: char, aa2: char, pre: &[char], not_post: &[char], post: &[char]) -> bool {
@@ -192,5 +312,6 @@ fn get_digested_peptides(
 #[pymodule]
 fn protein_digest(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_digested_peptides, m)?)?;
+    m.add_function(wrap_pyfunction!(get_peptide_to_protein_map, m)?)?;
     Ok(())
 }
